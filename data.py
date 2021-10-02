@@ -27,11 +27,9 @@ pd.set_option('display.max_rows', 600)
 
 class VantilatorDataModule(pl.LightningDataModule):
 
-    def __init__(self, settings_path='./settings.json', CV_split=0, fixed_length=80):
+    def __init__(self, settings_path='./settings.json', CV_split=0, fixed_length=96):
 
         super(VantilatorDataModule, self).__init__()
-
-        self.CV_split = CV_split
 
         DATA_PATH = 'D:/data/ventilator-pressure-prediction/'
 
@@ -51,7 +49,7 @@ class VantilatorDataModule(pl.LightningDataModule):
         series = np.zeros((len(breaths), num_channels, fixed_length+1))
         series[:] = np.nan
 
-        trange = 2.5/(fixed_length+1)
+        trange = 3/(fixed_length+1)
 
         for i in tqdm(range(fixed_length+1)):
 
@@ -71,8 +69,7 @@ class VantilatorDataModule(pl.LightningDataModule):
             # if idx.sum()>0:
             #     print(np.min(info_in_range.sum(axis=2)), np.max(info_in_range.sum(axis=2)))
 
-            pass
-
+        # linear iterpolation
         ret = np.cumsum(np.nan_to_num(series), axis=-1)
         ret[:,:,3:] = ret[:,:,3:] - ret[:,:,:-3]
         ret[:,:,2:] = ret[:,:,2:] / 2
@@ -83,10 +80,26 @@ class VantilatorDataModule(pl.LightningDataModule):
 
         assert((~np.isfinite(series)).sum() == 0)
 
-        self.series_input = series[:,:2].astype(np.float32)
-
         if series.shape[1]>2:
-            self.series_target = series[:,-1].astype(np.float32)
+            self.series_target = series[:,-1].copy().astype(np.float32)
+
+        series = np.concatenate((series[:,:2],series[:,:2].copy(),series[:,:2].copy()), axis=1)
+        series[:,-4] = np.expand_dims(breaths[:,0,0],axis=1)
+        series[:,-3] = np.expand_dims(breaths[:,1,0],axis=1)
+        series[:,-2] = np.cumsum(series[:,0], axis=-1)
+        series[:,-1] = np.roll(series[:,0], 1, axis=-1)
+        series[:,-1,0] = series[:,0,0]
+
+        #series = series[:,:2]
+
+        # if CV_split != -1:
+
+        #     ids = np.array(range(len(series)))
+        #     idx_train = ids % 5 != CV_split
+        #     series = series - np.mean(series[idx_train],axis=(0,2)).reshape(-1,1)
+        #     series = series / np.std(series[idx_train],axis=(0,2)).reshape(-1,1)
+
+        self.series_input = series.astype(np.float32)
 
         self.features = np.hstack((np.unique(breaths[:,0],axis=1), np.unique(breaths[:,1],axis=1))).astype(np.float32)
 
@@ -98,20 +111,19 @@ class VantilatorDataModule(pl.LightningDataModule):
 
         #TODO: sorting
 
-        if CV_spli == -1:
+        if CV_split == -1:
 
             self.data_loader_test = DataLoader(SeriesDataSet(   self.series_input,
-                                                                self.features,
-                                                                self.series_target ), batch_size=2096, shuffle=False)
+                                                                self.features ), batch_size=2096, shuffle=False)
         else:
             ids = np.array(range(len(self.series_input)))
 
-            idx_train = ids % 5 != self.CV_split
+            idx_train = ids % 5 != CV_split
             self.data_loader_train = DataLoader(SeriesDataSet(  self.series_input[idx_train],
                                                                 self.features[idx_train],
                                                                 self.series_target[idx_train] ), batch_size=1024, shuffle=True)
 
-            idx_val = ids % 5 == self.CV_split
+            idx_val = ids % 5 == CV_split
             self.data_loader_val = DataLoader(SeriesDataSet(    self.series_input[idx_val],
                                                                 self.features[idx_val],
                                                                 self.series_target[idx_val] ), batch_size=2096, shuffle=False)
@@ -122,13 +134,13 @@ class VantilatorDataModule(pl.LightningDataModule):
 
     def val_dataloader(self):
 
-        return data_loader_val
+        return self.data_loader_val
 
 
 
 class SeriesDataSet(Dataset):
     
-    def __init__(self, series_input, features, series_target):
+    def __init__(self, series_input, features, series_target=None):
 
         super(SeriesDataSet, self).__init__()
 
@@ -142,7 +154,10 @@ class SeriesDataSet(Dataset):
 
     def __getitem__(self, idx):
 
-        return self.series_input[idx], self.features[idx], self.series_target[idx]
+        if self.series_target is None:
+            return self.series_input[idx], self.features[idx]
+        else:
+            return self.series_input[idx], self.features[idx], self.series_target[idx]
 
 
 if __name__ == '__main__':
