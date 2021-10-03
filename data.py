@@ -14,6 +14,8 @@ import torch.nn.functional as F
 import pytorch_lightning as pl
 from torch.utils.data import DataLoader, Dataset
 
+from unet import UNet
+
 # from sklearn.preprocessing import MinMaxScaler
 # from scipy.signal import find_peaks
 # from scipy.interpolate import interp1d
@@ -27,14 +29,24 @@ pd.set_option('display.max_rows', 600)
 
 class VantilatorDataModule(pl.LightningDataModule):
 
-    def __init__(self, settings_path='./settings.json', CV_split=0, fixed_length=96):
+    def __init__(self, settings_path='./settings.json', CV_split=0, fixed_length=128):
 
         super(VantilatorDataModule, self).__init__()
 
         DATA_PATH = 'D:/data/ventilator-pressure-prediction/'
 
         file_name = 'test' if CV_split==-1 else 'train'
-        data = pd.read_csv(DATA_PATH + file_name + '.csv',index_col=0).to_numpy()
+
+        df = pd.read_csv(DATA_PATH + file_name + '.csv',index_col=0)
+        df['area'] = df['time_step'] * df['u_in']
+        df['area'] = df.groupby('breath_id')['area'].cumsum()
+
+        cols = list(df.columns)
+
+        if 'pressure' in cols:
+            df = df[cols[:6] + cols[7:] + cols[6:7]]
+
+        data = df.to_numpy(dtype=np.float32)
 
         # data[data[:,0]==8522][40,3]
         # data[data[:,0]==44245][40,3]
@@ -80,24 +92,22 @@ class VantilatorDataModule(pl.LightningDataModule):
 
         assert((~np.isfinite(series)).sum() == 0)
 
-        if series.shape[1]>2:
+        if 'pressure' in cols:
             self.series_target = series[:,-1].copy().astype(np.float32)
 
-        series = np.concatenate((series[:,:2],series[:,:2].copy(),series[:,:2].copy()), axis=1)
+        series = np.concatenate((series[:,:-1],series[:,:2].copy(),series[:,:2].copy()), axis=1)
         series[:,-4] = np.expand_dims(breaths[:,0,0],axis=1)
         series[:,-3] = np.expand_dims(breaths[:,1,0],axis=1)
         series[:,-2] = np.cumsum(series[:,0], axis=-1)
-        series[:,-1] = np.roll(series[:,0], 1, axis=-1)
-        series[:,-1,0] = series[:,0,0]
+        series[:,-1] = np.roll(series[:,0], 2, axis=-1)
+        series[:,-1,0] = series[:,0,:2]
 
-        #series = series[:,:2]
+        if CV_split != -1:
 
-        # if CV_split != -1:
-
-        #     ids = np.array(range(len(series)))
-        #     idx_train = ids % 5 != CV_split
-        #     series = series - np.mean(series[idx_train],axis=(0,2)).reshape(-1,1)
-        #     series = series / np.std(series[idx_train],axis=(0,2)).reshape(-1,1)
+            ids = np.array(range(len(series)))
+            idx_train = ids % 5 != CV_split
+            series = series - np.mean(series[idx_train],axis=(0,2)).reshape(-1,1)
+            series = series / np.std(series[idx_train],axis=(0,2)).reshape(-1,1)
 
         self.series_input = series.astype(np.float32)
 
@@ -148,18 +158,55 @@ class SeriesDataSet(Dataset):
         self.features = features
         self.series_target = series_target
 
+        fname = './checkpoints/UNET_CV51.ckpt'
+        if os.path.isfile(fname):
+
+            self.UNET_logits = np.zeros((len(series_input),33,series_input.shape[2])).astype(np.float32)
+
+            model = UNet.load_from_checkpoint(fname, n_channels=series_input.shape[1], n_classes=1)
+            model.to('cuda')
+            model.eval()
+
+            batch_size = 2**12
+            num_batches = math.ceil(len(series_input) / batch_size)
+
+            for bidx in tqdm(range(num_batches)):
+
+                start = bidx*batch_size
+                end   = start + min(batch_size, len(series_input) - start)
+
+                if start == end:
+                    break
+
+                mminput = series_input[start:end]
+
+                output = model(torch.tensor(mminput, dtype=torch.float32, device='cuda'),
+                            torch.tensor(features[start:end], dtype=torch.float32, device='cuda'))
+
+                o0 = output[0].detach().cpu().numpy()
+                o1 = output[1].detach().cpu().numpy()
+
+                self.UNET_logits[start:end] = np.concatenate((np.expand_dims(o0,1),o1),axis=1)
+
     def __len__(self):
 
         return len(self.series_input)
 
     def __getitem__(self, idx):
 
-        if self.series_target is None:
-            return self.series_input[idx], self.features[idx]
+        batch_row = self.series_input[idx], self.features[idx]
+
+        if hasattr(self, 'UNET_logits'):
+            batch_row += (self.UNET_logits[idx],)
         else:
-            return self.series_input[idx], self.features[idx], self.series_target[idx]
+            batch_row += (np.array(np.nan),)
+
+        if not self.series_target is None:
+            batch_row += (self.series_target[idx],)
+
+        return batch_row
 
 
 if __name__ == '__main__':
 
-    data = VantilatorDataModule(CV_split=0)
+    data = VantilatorDataModule()

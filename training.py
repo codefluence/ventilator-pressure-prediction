@@ -17,6 +17,8 @@ from data import VantilatorDataModule
 from model import PatternFinder, PatternFinderDilated
 from model_lstm import LSTMfinder
 
+from unet import UNet
+
 def fit_model(CV_split):
 
     torch.cuda.manual_seed(0)
@@ -30,10 +32,12 @@ def fit_model(CV_split):
 
     data = VantilatorDataModule(CV_split=CV_split)
 
-    #model = PatternFinder(in_channels = data.series_input.shape[1], series_length=data.series_input.shape[2])
-    model = LSTMfinder(in_channels = data.series_input.shape[1])
+    model = UNet(n_channels=data.series_input.shape[1], n_classes=1)
+    #model = LSTMfinder(in_channels = data.series_input.shape[1]+33)
 
-    filename = 'CNN_CV5'+str(CV_split)
+    #model = PatternFinder(in_channels = data.series_input.shape[1], series_length=data.series_input.shape[2])    
+
+    filename = model.name + '_CV5'+str(CV_split)
     dirpath='./checkpoints/'
 
     early_stop_callback = EarlyStopping(

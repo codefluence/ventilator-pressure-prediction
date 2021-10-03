@@ -14,7 +14,7 @@ from pytorch_lightning import LightningModule
 
 class PatternFinder(LightningModule):
 
-    def __init__(self, in_channels, series_length, multf=4):
+    def __init__(self, in_channels, series_length, multf=11):
 
         super(PatternFinder, self).__init__()
 
@@ -23,27 +23,32 @@ class PatternFinder(LightningModule):
 
         self.batch_norm_1d = nn.BatchNorm1d(in_channels)
 
-        self.conv1 = nn.Conv1d(in_channels, in_channels*multf, kernel_size=self.ks, stride=self.st, padding=1)
-        self.conv2 = nn.Conv1d(in_channels*multf, in_channels*multf**2, kernel_size=self.ks, stride=self.st, padding=1)
-        self.conv3 = nn.Conv1d(in_channels*multf**2, in_channels*multf**3, kernel_size=self.ks, stride=self.st, padding=1)
-        self.conv4 = nn.Conv1d(in_channels*multf**3, in_channels*multf**3, kernel_size=self.ks, stride=self.st, padding=1)
+        self.conv1 = nn.Conv1d(in_channels, multf**2, kernel_size=self.ks, stride=self.st, padding=1)
+        self.conv2 = nn.Conv1d(multf**2, multf**2, kernel_size=self.ks, stride=self.st, padding=1)
+        self.conv3 = nn.Conv1d(multf**2, multf**2, kernel_size=self.ks, stride=self.st, padding=1)
 
-        self.conv4r = nn.Conv1d(in_channels*multf**3, in_channels*multf**3, kernel_size=self.ks, stride=self.st, padding=1)
-        self.conv3r = nn.Conv1d(in_channels*multf**3, in_channels*multf**2, kernel_size=self.ks, stride=self.st, padding=1)
-        self.conv2r = nn.Conv1d(in_channels*multf**2, in_channels*multf, kernel_size=self.ks, stride=self.st, padding=1)
-        self.conv1r = nn.Conv1d(in_channels*multf, in_channels, kernel_size=self.ks, stride=self.st, padding=1)
+        self.conv4 = nn.Conv1d(multf**2 + in_channels, multf**2 + in_channels, kernel_size=self.ks, stride=self.st, padding=1)
+        self.conv5 = nn.Conv1d(multf**2 + in_channels, multf**2 + in_channels, kernel_size=self.ks, stride=self.st, padding=1)
+        self.conv6 = nn.Conv1d(multf**2 + in_channels, multf**2 + in_channels, kernel_size=self.ks, stride=self.st, padding=1)
 
-        #self.convf1 = nn.Conv1d(in_channels, in_channels//2, kernel_size=self.ks, stride=self.st, padding=1)
-        #self.convf2 = nn.Conv1d(in_channels//2, in_channels, kernel_size=self.ks, stride=self.st, padding=1)
+        # self.conv4r = nn.Conv1d(in_channels*multf**2, in_channels*multf**2, kernel_size=self.ks, stride=self.st, padding=1)
+        # self.conv3r = nn.Conv1d(in_channels*multf**2, in_channels*multf**2, kernel_size=self.ks, stride=self.st, padding=1)
+        # self.conv2r = nn.Conv1d(in_channels*multf**2, in_channels*multf, kernel_size=self.ks, stride=self.st, padding=1)
+        # self.conv1r = nn.Conv1d(in_channels*multf, in_channels, kernel_size=self.ks, stride=self.st, padding=1)
 
-        # self.mlp = nn.Linear(series_length*6+2,series_length)
+        self.convf = nn.Conv1d(multf**2 + 2*in_channels, 1, kernel_size=1, stride=self.st, padding=0)
 
-        # self.lstm   = nn.LSTM(  input_size=24, hidden_size=100,
+        #self.mlp = nn.Linear(in_channels**2+2,1)
+
+        # LSTM_input_size = in_channels*2#in_channels*multf**3 + in_channels
+        # LSTM_hidden_size = 100
+
+        # self.lstm   = nn.LSTM(  input_size=LSTM_input_size, hidden_size=LSTM_hidden_size,
         #                         num_layers=3, batch_first=True, bidirectional=True)
-        # self.linear = nn.Linear(200, 1)
+        # self.linear = nn.Linear(LSTM_hidden_size*2, 1)
 
 
-    def forward(self, series,features):
+    def forward(self, series, features):
 
         x = series
 
@@ -56,40 +61,47 @@ class PatternFinder(LightningModule):
         x = self.conv3(x)
         x = F.leaky_relu(x)
 
+        x = torch.cat((x,series),dim=1)
+
         x = self.conv4(x)
         x = F.leaky_relu(x)
 
-        x = self.conv4r(x)
+        x = self.conv5(x)
         x = F.leaky_relu(x)
 
-        x = self.conv3r(x)
+        x = self.conv6(x)
         x = F.leaky_relu(x)
 
-        x = self.conv2r(x)
+        # x = self.conv4r(x)
+        # x = F.leaky_relu(x)
+
+        # x = self.conv3r(x)
+        # x = F.leaky_relu(x)
+
+        # x = self.conv2r(x)
+        # x = F.leaky_relu(x)
+
+        # x = self.conv1r(x)
+        # x = F.leaky_relu(x)
+
+        x = torch.cat((x,series),dim=1)
+
+        x = self.convf(x)
         x = F.leaky_relu(x)
 
-        x = self.conv1r(x)
-        x = F.leaky_relu(x)
+        return x.squeeze(1)
 
+        # x = torch.hstack((x.flatten(start_dim=1),features))
+        # #return self.mlp(torch.hstack((x.flatten(start_dim=1),features)))
+        # x = torch.cat((x,series),dim=1)
+        # x = self.mlp(x)
 
         # output, (hn, cn) = self.lstm(torch.swapaxes(x, 1, 2))
         # x = self.linear(output)
         # x = F.leaky_relu(x)
 
-        # return torch.swapaxes(x, 1, 2).squeeze(1)
+        #return torch.swapaxes(x, 1, 2).squeeze(1)
 
-
-        # x = self.convf1(x)
-        # x = F.leaky_relu(x)
-
-        # x = self.convf2(x)
-        # x = F.leaky_relu(x)
-
-
-
-        x = self.mlp(torch.hstack((x.flatten(start_dim=1),features)))
-
-        return x
 
     def training_step(self, train_batch, batch_idx):
 
@@ -122,7 +134,7 @@ class PatternFinder(LightningModule):
     def configure_optimizers(self):
 
         optimizer = torch.optim.Adam(self.parameters(), lr=3e-3)
-        sccheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=2, factor=1/3, verbose=True, min_lr=1e-5)
+        sccheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=2, factor=1/5, verbose=True, min_lr=1e-5)
         return [optimizer], {'scheduler': sccheduler, 'monitor': 'val_mae'}
 
 
@@ -193,7 +205,11 @@ class PatternFinderDilated(LightningModule):
         #loss = torch.mean(torch.square(series_target - series_output))
         loss = F.mse_loss(series_target, series_output, reduction='sum') 
 
+        with torch.no_grad():
+            train_mae = torch.mean(torch.abs(series_target.flatten() - series_output.flatten())).cpu().item()
+
         self.log('train_loss', loss.cpu().item())
+        self.log('train_mae', train_mae)
 
         return loss
 
@@ -215,7 +231,7 @@ class PatternFinderDilated(LightningModule):
     def configure_optimizers(self):
 
         optimizer = torch.optim.Adam(self.parameters(), lr=3e-3)
-        sccheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=2, factor=1/3, verbose=True, min_lr=1e-5)
+        sccheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=2, factor=1/5, verbose=True, min_lr=1e-5)
         return [optimizer], {'scheduler': sccheduler, 'monitor': 'val_mae'}
 
 
