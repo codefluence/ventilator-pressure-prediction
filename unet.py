@@ -88,14 +88,13 @@ class OutConv(nn.Module):
 
 class UNet(LightningModule):
 
-    def __init__(self, n_channels, n_classes, bilinear=True, div=2):
+    def __init__(self, n_channels, bilinear=True, div=2):
 
         super(UNet, self).__init__()
 
         self.name = 'UNET'
 
         self.n_channels = n_channels
-        self.n_classes = n_classes
         self.bilinear = bilinear
 
         self.inc = DoubleConv(n_channels, 64//div)
@@ -108,7 +107,7 @@ class UNet(LightningModule):
         self.up2 = Up(512//div, 256//div // factor, bilinear)
         self.up3 = Up(256//div, 128//div // factor, bilinear)
         self.up4 = Up(128//div, 64//div, bilinear)
-        self.outc = OutConv(64//div, n_classes)
+        self.outc = OutConv(64//div, 1)
 
     def forward(self, x, f):
 

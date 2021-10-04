@@ -29,7 +29,7 @@ pd.set_option('display.max_rows', 600)
 
 class VantilatorDataModule(pl.LightningDataModule):
 
-    def __init__(self, settings_path='./settings.json', CV_split=0, fixed_length=128):
+    def __init__(self, settings_path='./settings.json', CV_split=0, fixed_length=128, scale=True):
 
         super(VantilatorDataModule, self).__init__()
 
@@ -100,9 +100,9 @@ class VantilatorDataModule(pl.LightningDataModule):
         series[:,-3] = np.expand_dims(breaths[:,1,0],axis=1)
         series[:,-2] = np.cumsum(series[:,0], axis=-1)
         series[:,-1] = np.roll(series[:,0], 2, axis=-1)
-        series[:,-1,0] = series[:,0,:2]
+        series[:,-1,:2] = np.expand_dims(series[:,0,0],axis=1)
 
-        if CV_split != -1:
+        if scale and CV_split != -1:
 
             ids = np.array(range(len(series)))
             idx_train = ids % 5 != CV_split
