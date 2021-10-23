@@ -6,6 +6,7 @@ import torch.optim as optim
 from pytorch_lightning import LightningModule
 
 
+# Adapted to 1D from https://github.com/milesial/Pytorch-UNet
 
 class DoubleConv(nn.Module):
     """(convolution => [BN] => ReLU) * 2"""
@@ -29,8 +30,6 @@ class DoubleConv(nn.Module):
     def forward(self, x):
         return self.double_conv(x)
 
-
-
 class Down(nn.Module):
     """Downscaling with maxpool then double conv"""
 
@@ -43,8 +42,6 @@ class Down(nn.Module):
 
     def forward(self, x):
         return self.maxpool_conv(x)
-
-
 
 class Up(nn.Module):
     """Upscaling then double conv"""
@@ -73,7 +70,6 @@ class Up(nn.Module):
         # https://github.com/xiaopeng-liao/Pytorch-UNet/commit/8ebac70e633bac59fc22bb5195e513d5832fb3bd
         x = torch.cat([x2, x1], dim=1)
         return self.conv(x)
-
 
 class OutConv(nn.Module):
     def __init__(self, in_channels, out_channels):
@@ -109,7 +105,9 @@ class UNet(LightningModule):
         self.up4 = Up(128//div, 64//div, bilinear)
         self.outc = OutConv(64//div, 1)
 
-    def forward(self, x, f):
+        self.mae_loss = torch.nn.L1Loss()
+
+    def forward(self, x):
 
         x1 = self.inc(x)
 
@@ -124,16 +122,15 @@ class UNet(LightningModule):
         x = self.up4(x, x1)
 
         logits = self.outc(x)
-        return logits.squeeze(1), x
+        return logits.squeeze(1)
 
     def training_step(self, train_batch, batch_idx):
 
-        series_input, features, _, series_target = train_batch
+        series_input,series_target = train_batch
 
-        series_output = self.forward(series_input, features)[0]
+        series_output = self.forward(series_input)
 
-        #loss = torch.mean(torch.square(series_target - series_output))
-        loss = F.mse_loss(series_target, series_output, reduction='sum') 
+        loss = self.mae_loss(series_target, series_output)
 
         with torch.no_grad():
             train_mae = torch.mean(torch.abs(series_target.flatten() - series_output.flatten())).cpu().item()
@@ -145,12 +142,11 @@ class UNet(LightningModule):
 
     def validation_step(self, val_batch, batch_idx):
 
-        series_input, features, _, series_target = val_batch
+        series_input, series_target = val_batch
 
-        series_output = self.forward(series_input, features)[0]
+        series_output = self.forward(series_input)
 
-        #loss = torch.mean(torch.square(series_target - series_output))
-        loss = F.mse_loss(series_target, series_output, reduction='sum') 
+        loss = self.mae_loss(series_target, series_output)#, reduction='sum'
 
         #TODO: nograd needed?
         val_mae = torch.mean(torch.abs(series_target.flatten() - series_output.flatten())).cpu().item()
@@ -160,7 +156,7 @@ class UNet(LightningModule):
 
     def configure_optimizers(self):
 
-        optimizer = torch.optim.Adam(self.parameters(), lr=3e-3)
-        sccheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=2, factor=1/5, verbose=True, min_lr=1e-5)
+        optimizer = torch.optim.Adam(self.parameters(), lr=1e-3)
+        sccheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.9)
         return [optimizer], {'scheduler': sccheduler, 'monitor': 'val_mae'}
 
