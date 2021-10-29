@@ -50,7 +50,7 @@ def fit_data(model_name, CV_split):
         patience=11,
         verbose=True,
         mode='min',
-        min_delta=0.001
+        min_delta=0.0001
     )
 
     checkpoint_callback = ModelCheckpoint(

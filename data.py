@@ -24,9 +24,11 @@ DATA_PATH = 'D:/data/ventilator-pressure-prediction/'
 
 class VantilatorDataModule(pl.LightningDataModule):
 
-    def __init__(self, dataset='train', CV_split=0, fixed_length=128):
+    def __init__(self, dataset='train', CV_split=0, span=0.5):
 
         super(VantilatorDataModule, self).__init__()
+
+        fixed_length = int(128 * span)
 
         df = pd.read_csv(DATA_PATH + dataset + '.csv',index_col=0)
 
@@ -44,13 +46,45 @@ class VantilatorDataModule(pl.LightningDataModule):
         df['expand_std'] = df.groupby('breath_id')['u_in'].expanding(2).std().reset_index(level=0,drop=True)
         #######################################################################################################################
 
+        ################## picked from https://www.kaggle.com/carlmcbrideellis/tpu-ventilator-lstm ##################
+        # my features
+        df['u_in_lag_1'] = df.groupby('breath_id')['u_in'].shift(1).fillna(method="backfill")
+        df['u_in_delta_1'] = df['u_in'] - df['u_in_lag_1']
+        df['u_in_lag_2'] = df.groupby('breath_id')['u_in'].shift(2).fillna(method="backfill")
+        df['u_in_delta_02'] = df['u_in']       - df['u_in_lag_2']
+        df['u_in_delta_12'] = df['u_in_lag_1'] - df['u_in_lag_2']
+        df['u_in_cumsum'] = (df['u_in']).groupby(df['breath_id']).cumsum()
+        
+        # descriptive features
+        df['u_in_mean'] = df.groupby('breath_id')['u_in'].transform('mean')
+        df['u_in_max'] = df.groupby('breath_id')['u_in'].transform('max')
+        df['u_in_min'] = df.groupby('breath_id')['u_in'].transform('min')
+        df['u_in_median'] = df.groupby('breath_id')['u_in'].transform('median')
+        df['first_value_u_in'] = df.groupby('breath_id')['u_in'].transform('first')
+        df["u_in_sum"] = df.groupby("breath_id")["u_in"].transform("sum")
+        df["u_in_std"] = df.groupby("breath_id")["u_in"].transform("std")
+        # this is a guide to the initial pressure 
+        df['last_value_u_in'] = df.groupby('breath_id')['u_in'].transform('last')
+
+        # Lukasz Borecki features
+        df['u_in_change']   = df['u_in'].shift(-1, fill_value=0) - df['u_in']
+        df['delta_time']    = df['time_step'].shift(-1, fill_value=0) - df['time_step']
+        df['uin_in_time']   = df['u_in_change']/df['delta_time']
+        
+        # categoricals
+        df['R__C'] = df['R'].astype(str) + '__' + df['C'].astype(str)
+        df = pd.get_dummies(df)
+        #######################################################################################################################
+
         df = df.fillna(0)
 
         cols = list(df.columns)
 
-        # placing pressure column as the last column
+        #placing pressure column as the last column
         if 'pressure' in cols:
-            df = df[cols[:6] + cols[7:] + cols[6:7]]
+            pressure = df['pressure']
+            df = df.drop(['pressure'], axis=1)
+            df['pressure'] = pressure
 
         data = df.to_numpy(dtype=np.float32)
 
@@ -66,8 +100,8 @@ class VantilatorDataModule(pl.LightningDataModule):
         indices = np.zeros((breaths.shape[0], fixed_length+1))
         indices[:] = np.nan
 
-        # one value added to the end for interpolation
-        trange = 3 / (fixed_length+1)
+        # one time step added to the end for interpolation
+        trange = (3*span) / (fixed_length+1)
 
         # scaling all the time series to a [0,3] interval
         for i in tqdm(range(fixed_length+1)):
@@ -93,37 +127,35 @@ class VantilatorDataModule(pl.LightningDataModule):
 
         assert((~np.isfinite(series)).sum() == 0)
 
-        self.series_target = series[:,-1].copy().astype(np.float32)
-
         if 'pressure' in cols:
-            # removing pressure from input series
+
+            self.orig_pressure = breaths[:,-1]
+            self.series_target = (series[:,-1]).astype(np.float32)
             series = series[:,:-1]
 
-            self.pressure = breaths[:,-1].copy()
         else:
-            # pressure is unknown
             self.series_target[:] = np.nan
 
-        u_in = series[:,3]
-        cum_integral = np.cumsum(u_in, axis=-1)
-        first_derivative = np.diff(u_in, prepend=0)
-        second_derivative = np.diff(first_derivative, prepend=0)
+        # u_in = series[:,3]
+        # cum_integral = np.cumsum(u_in, axis=-1)
+        # first_derivative = np.diff(u_in, prepend=0)
+        # second_derivative = np.diff(first_derivative, prepend=0)
 
-        #replacing "time_step"
-        series[:,2] = cum_integral
-
-        series = np.concatenate((   series,
-                                    np.expand_dims(first_derivative, axis=1),
-                                    np.expand_dims(second_derivative, axis=1)), axis=1)
+        # series = np.concatenate((   series,
+        #                             np.expand_dims(cum_integral, axis=1),
+        #                             np.expand_dims(first_derivative, axis=1),
+        #                             np.expand_dims(second_derivative, axis=1)), axis=1)
 
         assert((~np.isfinite(series)).sum() == 0)
 
         semf = './checkpoints/series_means_5{}.npy'.format(CV_split)
         sesf = './checkpoints/series_stds_5{}.npy'.format(CV_split)
 
-        if dataset == 'train':
+        ids = np.array(range(len(series)))
+        idx_train = ids % 5 != CV_split
+        idx_val = ids % 5 == CV_split
 
-            idx_train = np.array(range(len(series))) % 5 != CV_split
+        if dataset == 'train':
 
             series_means = np.mean(series[idx_train],axis=(0,2)).reshape(-1,1)
             np.save(semf, series_means)
@@ -131,23 +163,20 @@ class VantilatorDataModule(pl.LightningDataModule):
             series_stds = np.std(series[idx_train],axis=(0,2)).reshape(-1,1)
             np.save(sesf, series_stds)
 
-            series = (series - series_means) / series_stds
+            self.series_input = (series - series_means) / series_stds
         else:
 
-            series = (series - np.load(semf)) / np.load(sesf)
+            self.series_input = (series - np.load(semf)) / np.load(sesf)
 
-        self.series_input = series.astype(np.float32)
+        self.series_input[:,-9:] = series[:,-9:]
+        self.series_input = self.series_input.astype(np.float32)
 
         # 'R' and 'C' as tabular data (already fed as channels)
         #self.features = np.hstack((np.unique(breaths[:,0],axis=1), np.unique(breaths[:,1],axis=1))).astype(np.float32)
-
-        ids = np.array(range(len(self.series_input)))
-
-        idx_train = ids % 5 != CV_split
+        
         self.data_loader_train = DataLoader(SeriesDataSet(  self.series_input[idx_train],
                                                             self.series_target[idx_train] ), batch_size=512, shuffle=True)
 
-        idx_val = ids % 5 == CV_split
         self.data_loader_val = DataLoader(SeriesDataSet(    self.series_input[idx_val],
                                                             self.series_target[idx_val] ), batch_size=4192, shuffle=False)
 

@@ -158,5 +158,7 @@ class UNet(LightningModule):
 
         optimizer = torch.optim.Adam(self.parameters(), lr=1e-3)
         sccheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.9)
+        #sccheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=5, factor=0.8, verbose=True)
         return [optimizer], {'scheduler': sccheduler, 'monitor': 'val_mae'}
+
 
